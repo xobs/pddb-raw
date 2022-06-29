@@ -57,19 +57,19 @@ impl ListDictRequest {
             for (src, dest) in name_length
                 .to_le_bytes()
                 .iter()
-                .zip(self.data[5..8].iter_mut())
+                .zip(self.data[4..8].iter_mut())
             {
                 *dest = *src;
             }
             // Copy the name bytes
-            for (src, dest) in basis.as_bytes().iter().zip(self.data[4..].iter_mut()) {
+            for (src, dest) in basis.as_bytes().iter().zip(self.data[8..].iter_mut()) {
                 *dest = *src;
             }
         }
         // Otherwise, zero out the "name" field
         else {
             // Write "0" for the length
-            for dest in self.data[5..8].iter_mut() {
+            for dest in self.data[4..8].iter_mut() {
                 *dest = 0;
             }
         }

@@ -43,8 +43,6 @@ pub struct BasisList {
 impl BasisList {
     pub fn new(buffer: [u8; 4096]) -> Option<Self> {
         let version = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
-        // println!("Version returned: {}", version);
-
         if version != 1 {
             return None;
         }
