@@ -1,6 +1,7 @@
 const SERVER_NAME_KEYS: &str = "_Root key server and update manager_";
 const SERVER_NAME_PDDB: &str = "_Plausibly Deniable Database_";
 
+use std::path::Path;
 use std::{io::Read, io::Seek, io::Write};
 
 mod services;
@@ -9,6 +10,7 @@ mod basis;
 mod dict;
 mod key;
 mod path;
+mod senres;
 
 #[repr(usize)]
 pub(crate) enum Opcodes {
@@ -106,9 +108,33 @@ impl Pddb {
     }
 }
 
+fn recursively_list_dirs(root: &Path) {
+    use std::fs;
+    println!("Recursively listing {} ({:?})", root.display(), root);
+
+    // one possible implementation of walking a directory only visiting files
+    fn visit_dirs(dir: &Path) -> std::io::Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    println!(">>> Entering directory {}", path.display());
+                    visit_dirs(&path)?;
+                    println!("<<< left directory {}", path.display());
+                } else {
+                    println!("File: {}", path.display());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    visit_dirs(root).unwrap();
+}
+
 fn main() {
     println!("PDDB Raw Operations");
-    std::thread::sleep(std::time::Duration::from_millis(300));
     println!("Unlocking DB...");
     unlock_db("a");
 
@@ -157,6 +183,11 @@ fn main() {
         }
     }
 
+    println!("Going to recursively list directories...");
+    recursively_list_dirs(Path::new(""));
+    recursively_list_dirs(Path::new("::"));
+    recursively_list_dirs(Path::new(":"));
+
     println!("Opening a file...");
     let mut file = key::Key::open(pddb.cid, None, "wlan.networks", "Renode").unwrap();
     println!("Reading password...");
@@ -173,4 +204,6 @@ fn main() {
         .expect("unable to update password");
 
     println!("Done with operations");
+
+    let req: senres::Senres = senres::Senres::new();
 }

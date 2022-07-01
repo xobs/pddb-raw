@@ -187,6 +187,13 @@ impl Key {
         req.data[read_offset] = if create_key { 1 } else { 0 };
         read_offset += 1;
 
+        let alloc_hint = 0u64;
+        for (src, dest) in alloc_hint.to_le_bytes().iter().zip(req.data[read_offset..read_offset+8].iter_mut()) {
+            *dest = *src;
+        }
+        read_offset += 8;
+    
+
         if let Some(cb_sid) = cb_sid {
             req.data[read_offset] = 1;
             read_offset += 1;

@@ -46,15 +46,19 @@
 #[cfg(test)]
 mod tests;
 
+#[allow(unused)]
 pub const MAIN_SEP_STR: &str = ":";
+#[allow(unused)]
 pub const MAIN_SEP: char = ':';
 
 #[inline]
+#[allow(unused)]
 pub fn is_sep_byte(b: u8) -> bool {
     b == b':'
 }
 
 #[inline]
+#[allow(unused)]
 pub fn is_verbatim_sep(b: u8) -> bool {
     b == b':'
 }

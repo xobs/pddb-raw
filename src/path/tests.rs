@@ -1,6 +1,59 @@
 use super::MAIN_SEP;
 use std::io;
 
+fn get_path<'a>(s: &'a str, prefix: &'a str) -> Option<&'a str> {
+    // Empty strings are invalid
+    if s.is_empty() {
+        return None;
+    }
+    // The "" prefix indicates the root
+    if prefix.is_empty() {
+        let mut s_iter = s.split(':');
+        let base = s_iter.next();
+        let remainder = s_iter.next();
+        if remainder.is_some() {
+            return None;
+        }
+        return base;
+    }
+    let without_prefix = s.strip_prefix(prefix)?.strip_prefix(':')?;
+    let mut path_split = without_prefix.split(':');
+    let parent = path_split.next();
+    if path_split.next().is_some() {
+        None
+    } else {
+        parent
+    }
+}
+
+#[test]
+fn test_split_vectors() {
+    let vectors = [
+        "",
+        "one",
+        "one:two",
+        "two",
+        "two:three",
+        "two:one",
+        "one:four",
+        "one:🥸",
+        "one:🥸:⛪",
+        "one:four:five",
+        "onery",
+        "oneful",
+    ];
+    let key = "";
+    for v in vectors.iter().filter(|x| get_path(x, key).is_some()) {
+        // print!("Testing \"{}\": ", v);
+        // if let Some(v) = get_path(v, key) {
+            println!(">>> {} <<<", v);
+        // } else {
+        //     println!("NOT a path");
+        // }
+    }
+}
+
+/// Split a path into its constituant Basis and Dict, if the path is legal.
 fn split_basis_and_dict<F: Fn() -> Option<String>>(src: &str, default: F) -> io::Result<(Option<String>, Option<String>)> {
     let mut basis = None;
     let dict;
@@ -25,7 +78,7 @@ fn split_basis_and_dict<F: Fn() -> Option<String>>(src: &str, default: F) -> io:
         }
     } else {
         if src.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::Other, "something's fishy"));
+            return Ok((basis, Some("".to_owned())));
         }
         dict = Some(src.to_owned());
     }
@@ -49,9 +102,8 @@ fn default_path() -> Option<String> {
 }
 
 #[test]
-#[should_panic]
 fn empty_string() {
-    split_basis_and_dict("", default_path).unwrap();
+    assert_eq!(split_basis_and_dict("", default_path).unwrap(), (None, Some("".to_owned())));
 }
 
 #[test]
