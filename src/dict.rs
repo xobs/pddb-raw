@@ -1,140 +1,63 @@
-#[repr(C, align(4096))]
-pub struct ListDictRequest {
-    data: [u8; 4096],
+use crate::senres::Senres;
+
+#[derive(Debug)]
+pub enum EntryKind {
+    Basis = 0,
+    Dict = 1,
+    Key = 2,
 }
 
-impl ListDictRequest {
-    pub fn new(basis: Option<&str>) -> ListDictRequest {
-        let mut this = ListDictRequest { data: [0u8; 4096] };
-        Self::set_version(&mut this, 1);
-        Self::set_basis(&mut this, basis);
+#[derive(Debug)]
+pub struct Entry {
+    name: String,
+    kind: EntryKind,
+}
+pub struct PathList {
+    entries: Vec<Entry>,
+}
 
-        this
-    }
+impl PathList {
+    pub fn new(connection: u32, path: &str) -> Option<Self> {
+        let mut request = crate::senres::Stack::<4096>::new();
 
-    pub fn invoke(mut self, connection: u32) -> Result<DictList, ()> {
-        let memory_range = unsafe {
-            xous::MemoryRange::new(
-                &mut self.data as *mut _ as usize,
-                core::mem::size_of::<ListDictRequest>(),
-            )
-            .unwrap()
-        };
-
-        let result = xous::send_message(
-            connection,
-            xous::Message::new_lend_mut(
-                crate::Opcodes::ListDictStd as usize,
-                memory_range,
-                None,
-                core::num::NonZeroUsize::new(4096),
-            ),
-        );
-
-        if let Ok(xous::Result::MemoryReturned(_, _)) = result {
-            Ok(DictList::new(self.data).unwrap())
-        } else {
-            Err(())
-        }
-    }
-
-    fn set_version(&mut self, request_version: usize) {
-        let request_version: u32 = request_version.try_into().unwrap();
-        // Version number of the request
-        for (src, dest) in request_version
-            .to_le_bytes()
-            .iter()
-            .zip(self.data[0..4].iter_mut())
         {
-            *dest = *src;
+            let mut writer = request.writer(*b"PthQ")?;
+            // Request version 1 of the buffer
+            writer.append(1u32);
+            writer.append(path);
         }
-    }
 
-    pub fn set_basis(&mut self, basis: Option<&str>) {
-        // If there's a name, add that
-        if let Some(basis) = basis {
-            let name_length = basis.len() as u32;
-            for (src, dest) in name_length
-                .to_le_bytes()
-                .iter()
-                .zip(self.data[4..8].iter_mut())
-            {
-                *dest = *src;
-            }
-            // Copy the name bytes
-            for (src, dest) in basis.as_bytes().iter().zip(self.data[8..].iter_mut()) {
-                *dest = *src;
-            }
-        }
-        // Otherwise, zero out the "name" field
-        else {
-            // Write "0" for the length
-            for dest in self.data[4..8].iter_mut() {
-                *dest = 0;
-            }
-        }
-    }
-}
+        request
+            .lend_mut(connection, crate::Opcodes::ListPathStd as usize)
+            .unwrap();
 
-pub struct DictList {
-    data: [u8; 4096],
-}
-
-impl DictList {
-    pub fn new(buffer: [u8; 4096]) -> Option<Self> {
-        let version = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
-        if version != 1 {
+        let reader = request.reader(*b"PthR").expect("unable to get reader");
+        if let Ok(1u32) = reader.try_get_from() {
+        } else {
+            panic!("Unexpected value");
             return None;
         }
-        Some(DictList { data: buffer })
+
+        let mut entries = vec![];
+        let count = reader.try_get_from::<u32>().unwrap() as usize;
+        for _ in 0..count {
+            let name = reader.try_get_ref_from::<str>().unwrap().to_owned();
+            let kind = match reader.try_get_from::<u8>() {
+                Ok(0) => EntryKind::Basis,
+                Ok(1) => EntryKind::Dict,
+                Ok(2) => EntryKind::Key,
+                v => panic!("unexpected entrykind {:?}", v),//return None,
+            };
+            entries.push(Entry { name, kind });
+        }
+        Some(PathList { entries })
     }
 
     pub fn len(&self) -> usize {
-        self.data[4] as usize
+        self.entries.len()
     }
 
-    pub fn iter(&self) -> DictListIter {
-        DictListIter::new(self)
-    }
-}
-
-pub struct DictListIter<'a> {
-    data: &'a [u8],
-    index: usize,
-    running_offset: usize,
-}
-
-impl<'a> DictListIter<'a> {
-    pub fn new(list: &'a DictList) -> Self {
-        let len = list.data[4] as usize;
-        DictListIter {
-            data: list.data.as_slice(),
-            index: 0,
-            // Set the running offset to point at the first entry, which is
-            // 4 bytes of version plus one byte of length data plus the
-            // length of the lengths.
-            running_offset: 4 + 1 + len,
-        }
-    }
-}
-
-impl<'a> Iterator for DictListIter<'a> {
-    type Item = &'a str;
-    fn next(&mut self) -> Option<Self::Item> {
-        let current_value = core::str::from_utf8(
-            &self.data
-                [self.running_offset..self.running_offset + self.data[4 + 1 + self.index] as usize],
-        )
-        .ok();
-
-        if self.index >= self.data[4] as usize {
-            return None;
-        }
-
-        // Skip past the current string in preparation for the next string
-        self.running_offset += self.data[4 + 1 + self.index] as usize;
-        self.index += 1;
-
-        current_value
+    pub fn iter(&self) -> std::slice::Iter<'_, Entry> {
+        self.entries.iter()
     }
 }

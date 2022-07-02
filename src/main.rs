@@ -1,6 +1,7 @@
 const SERVER_NAME_KEYS: &str = "_Root key server and update manager_";
 const SERVER_NAME_PDDB: &str = "_Plausibly Deniable Database_";
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::{io::Read, io::Seek, io::Write};
 
@@ -27,6 +28,8 @@ pub(crate) enum Opcodes {
     OpenKeyStd = 30,
     ReadKeyStd = 31,
     WriteKeyStd = 32,
+
+    ListPathStd = 37,
 }
 
 fn unlock_db(key: &str) {
@@ -92,20 +95,23 @@ impl Pddb {
         .unwrap_or(false)
     }
 
-    pub fn list_basis(&self) -> basis::BasisList {
-        let request = basis::ListBasisRequest::new();
-        request.invoke(self.cid).unwrap()
+    pub fn list_bases(&self) -> basis::BasisList {
+        basis::BasisList::new(self.cid).unwrap()
     }
 
-    fn list_dictionaries(&self, basis: Option<&str>) -> dict::DictList {
-        let request = dict::ListDictRequest::new(basis);
-        request.invoke(self.cid).unwrap()
+    // fn list_dictionaries(&self, basis: Option<&str>) -> dict::DictList {
+    //     let request = dict::ListDictRequest::new(basis);
+    //     request.invoke(self.cid).unwrap()
+    // }
+
+    fn list_path(&self, path: &str) -> dict::PathList {
+        dict::PathList::new(self.cid, path).unwrap()
     }
 
-    fn list_keys(&self, basis: Option<&str>, dict: &str) -> key::KeyList {
-        let request = key::ListKeyRequest::new(basis, dict);
-        request.invoke(self.cid).unwrap()
-    }
+    // fn list_keys(&self, basis: Option<&str>, dict: &str) -> key::KeyList {
+    //     let request = key::ListKeyRequest::new(basis, dict);
+    //     request.invoke(self.cid).unwrap()
+    // }
 }
 
 fn recursively_list_dirs(root: &Path) {
@@ -162,31 +168,40 @@ fn main() {
 
     println!("Doing other operations...");
     {
-        let list = pddb.list_basis();
+        let list = pddb.list_bases();
         println!("There are {} bases", list.len());
-        for entry in list.iter() {
+        for entry in &list.iter() {
             println!("Basis: {}", entry);
         }
     }
 
     {
-        let dicts = pddb.list_dictionaries(None);
-        println!("There are {} dicts in the union basis", dicts.len());
-        for dict in dicts.iter() {
-            println!("Dict: {}", dict);
+        // let dicts = pddb.list_dictionaries(None);
+        // println!("There are {} dicts in the union basis", dicts.len());
+        // for dict in dicts.iter() {
+        //     println!("Dict: {}", dict);
 
-            let keys = pddb.list_keys(None, dict);
-            println!("There are {} keys in the {} dict", keys.len(), dict);
-            for key in keys.iter() {
-                println!("    key: {}", key);
+        //     let keys = pddb.list_keys(None, dict);
+        //     println!("There are {} keys in the {} dict", keys.len(), dict);
+        //     for key in keys.iter() {
+        //         println!("    key: {}", key);
+        //     }
+        // }
+
+        for path in ["", ":", "wlan.networks", "sys.rtc", "fido.cfg", "vault.passwords"] {
+            println!("Listing path {}", path);
+            let entries = pddb.list_path(path);
+            for entry in entries.iter() {
+                println!("{:?}", entry);
             }
+            println!();
         }
     }
 
-    println!("Going to recursively list directories...");
-    recursively_list_dirs(Path::new(""));
-    recursively_list_dirs(Path::new("::"));
-    recursively_list_dirs(Path::new(":"));
+    // println!("Going to recursively list directories...");
+    // recursively_list_dirs(Path::new(""));
+    // recursively_list_dirs(Path::new("::"));
+    // recursively_list_dirs(Path::new(":"));
 
     println!("Opening a file...");
     let mut file = key::Key::open(pddb.cid, None, "wlan.networks", "Renode").unwrap();
@@ -197,13 +212,11 @@ fn main() {
         .expect("Unable to read password");
     println!("Password is {} bytes long: {}", len, password);
     println!("Appending {} to the password", password.len());
-    password.push_str(&format!("{}", password.len() + 1));
+    write!(password, "{}", password.len() + 1).unwrap();
     println!("Writing {} to password field", password);
     file.rewind().expect("couldn't rewind password file");
     file.write_all(password.as_bytes())
         .expect("unable to update password");
 
     println!("Done with operations");
-
-    let req: senres::Senres = senres::Senres::new();
 }
