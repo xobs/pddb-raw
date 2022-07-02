@@ -1,10 +1,35 @@
-#![allow(unused)]
+// #![allow(unused)]
+
+/// Senres V1 always begins with the number 0x344cb6ca to indicate it's valid.
+/// This number will change on subsequent versions.
+const SENRES_V1_MAGIC: u32 = 0x344cb6ca;
+
+use core::cell::Cell;
 /// A struct to send and receive data
 #[repr(C, align(4096))]
 #[derive(Debug)]
-pub struct Senres<const N: usize = 4096> {
+pub struct SenresStack<const N: usize = 4096> {
     data: [u8; N],
+}
+
+pub struct SenresMessage<'a, const N: usize = 4096> {
+    data: &'a mut [u8],
+}
+
+pub trait Senres {
+    fn as_slice(&self) -> &[u8];
+    fn as_mut_slice(&mut self) -> &mut [u8];
+}
+
+pub struct SenresWriter<'a, Backing: Senres, const N: usize> {
+    backing: &'a mut Backing,
     offset: usize,
+    valid: usize,
+}
+
+pub struct SenresReader<'a, Backing: Senres, const N: usize> {
+    backing: &'a Backing,
+    offset: Cell<usize>,
     valid: usize,
 }
 
@@ -24,21 +49,21 @@ enum SyscallResult {
     MemoryReturned = 18,
 }
 
-pub trait SenSer<const N: usize> {
-    fn append_to(&self, senres: &mut Senres<N>);
+pub trait SenSer<Backing: Senres, const N: usize> {
+    fn append_to(&self, senres: &mut SenresWriter<Backing, N>);
 }
 
-pub trait RecDes<const N: usize> {
-    fn try_get_from(senres: &mut Senres<N>) -> Result<Self, ()>
+pub trait RecDes<Backing: Senres, const N: usize> {
+    fn try_get_from(senres: &SenresReader<Backing, N>) -> Result<Self, ()>
     where
         Self: std::marker::Sized;
 }
 
-pub trait RecDesRef<'a, const N: usize> {
-    fn try_get_ref_from(senres: &'a mut Senres<N>) -> Result<&'a Self, ()>;
+pub trait RecDesRef<'a, Backing: Senres, const N: usize> {
+    fn try_get_ref_from(senres: &'a SenresReader<Backing, N>) -> Result<&'a Self, ()>;
 }
 
-impl<const N: usize> Senres<N> {
+impl<const N: usize> SenresStack<N> {
     /// Ensure that `N` is a multiple of 4096. This constant should
     /// be evaluated in the constructor function.
     const CHECK_ALIGNED: () = if N & 4095 != 0 {
@@ -47,25 +72,47 @@ impl<const N: usize> Senres<N> {
 
     pub const fn new() -> Self {
         // Ensure the `N` that was specified is a multiple of 4096
-        #[allow(clippy::no_effect)]
-        Self::CHECK_ALIGNED;
-        Senres {
-            data: [0u8; N],
+        #[allow(clippy::no_effect, clippy::let_unit_value)]
+        let _ = Self::CHECK_ALIGNED;
+        SenresStack { data: [0u8; N] }
+    }
+
+    pub fn writer(&mut self) -> SenresWriter<Self, N> {
+        let mut writer = SenresWriter {
+            backing: self,
             offset: 0,
             valid: 0,
+        };
+        writer.append(SENRES_V1_MAGIC);
+        writer
+    }
+
+    pub fn reader(&self) -> Option<SenresReader<Self, N>> {
+        let reader = SenresReader {
+            backing: self,
+            offset: Cell::new(0),
+            valid: 0,
+        };
+        if let Ok(SENRES_V1_MAGIC) = reader.try_get_from() {
+            Some(reader)
+        } else {
+            None
         }
     }
+}
 
-    pub fn append<T: SenSer<N>>(&mut self, other: T) {
+impl<const N: usize> Senres for SenresStack<N> {
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.data.as_mut_slice()
+    }
+    fn as_slice(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+}
+
+impl<'a, Backing: Senres, const N: usize> SenresWriter<'a, Backing, N> {
+    pub fn append<T: SenSer<Backing, N>>(&mut self, other: T) {
         other.append_to(self);
-    }
-
-    pub fn try_get_from<T: RecDes<N>>(&mut self) -> Result<T, ()> {
-        T::try_get_from(self)
-    }
-
-    pub fn try_get_ref_from<'a, T: RecDesRef<'a, N> + ?Sized>(&'a mut self) -> Result<&'a T, ()> {
-        T::try_get_ref_from(self)
     }
 
     #[cfg(not(target_os = "xous"))]
@@ -76,13 +123,7 @@ impl<const N: usize> Senres<N> {
     #[cfg(not(target_os = "xous"))]
     pub fn lend_mut(mut self, connection: u32, opcode: usize) -> Result<Self, ()> {
         // let (offset, valid) = self.invoke(connection, opcode, InvokeType::LendMut)?;
-        self.offset = 0;
-        self.valid = 0;
         Ok(self)
-    }
-
-    pub(crate) fn rewind(&mut self) {
-        self.offset = 0;
     }
 
     #[cfg(target_os = "xous")]
@@ -91,7 +132,7 @@ impl<const N: usize> Senres<N> {
         let mut a1: usize = connection.try_into().unwrap();
         let mut a2 = opcode;
         let mut a3 = InvokeType::Lend as usize;
-        let mut a4 = &self.data as *const _ as usize;
+        let mut a4 = &self.backing.as_slice().as_ptr() as *const _ as usize;
         let mut a5 = N;
         let mut a6 = 0;
         let mut a7 = self.offset;
@@ -124,7 +165,7 @@ impl<const N: usize> Senres<N> {
         let mut a1: usize = connection.try_into().unwrap();
         let mut a2 = opcode;
         let mut a3 = InvokeType::LendMut as usize;
-        let mut a4 = &mut self.data as *mut _ as usize;
+        let mut a4 = &mut self.backing.as_mut_slice().as_ptr() as *mut _ as usize;
         let mut a5 = N;
         let mut a6 = 0;
         let mut a7 = self.offset;
@@ -157,14 +198,24 @@ impl<const N: usize> Senres<N> {
     }
 }
 
+impl<'a, Backing: Senres, const N: usize> SenresReader<'a, Backing, N> {
+    pub fn try_get_from<T: RecDes<Backing, N>>(&self) -> Result<T, ()> {
+        T::try_get_from(self)
+    }
+
+    pub fn try_get_ref_from<T: RecDesRef<'a, Backing, N> + ?Sized>(&'a self) -> Result<&'a T, ()> {
+        T::try_get_ref_from(self)
+    }
+}
+
 macro_rules! primitive_impl {
     ($SelfT:ty) => {
-        impl<const N: usize> SenSer<N> for $SelfT {
-            fn append_to(&self, senres: &mut Senres<N>) {
+        impl<Backing: Senres, const N: usize> SenSer<Backing, N> for $SelfT {
+            fn append_to(&self, senres: &mut SenresWriter<Backing, N>) {
                 for (src, dest) in self
                     .to_le_bytes()
                     .iter()
-                    .zip(senres.data[senres.offset..].iter_mut())
+                    .zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
                 {
                     *dest = *src;
                     senres.offset += 1;
@@ -172,26 +223,27 @@ macro_rules! primitive_impl {
             }
         }
 
-        impl<const N: usize> RecDes<N> for $SelfT {
-            fn try_get_from(senres: &mut Senres<N>) -> Result<Self, ()> {
+        impl<Backing: Senres, const N: usize> RecDes<Backing, N> for $SelfT {
+            fn try_get_from(senres: &SenresReader<Backing, N>) -> Result<Self, ()> {
                 let my_size = core::mem::size_of::<Self>();
-                if senres.offset + my_size > senres.data.len() {
+                let offset = senres.offset.get();
+                if offset + my_size > senres.backing.as_slice().len() {
                     return Err(());
                 }
                 let val = Self::from_le_bytes(
-                    senres.data[senres.offset..senres.offset + my_size]
+                    senres.backing.as_slice()[offset..offset + my_size]
                         .try_into()
                         .unwrap(),
                 );
-                senres.offset += my_size;
+                senres.offset.set(offset + my_size);
                 Ok(val)
             }
         }
     };
 }
 
-impl<T: SenSer<N>, const N: usize> SenSer<N> for Option<T> {
-    fn append_to(&self, senres: &mut Senres<N>) {
+impl<T: SenSer<Backing, N>, Backing: Senres, const N: usize> SenSer<Backing, N> for Option<T> {
+    fn append_to(&self, senres: &mut SenresWriter<Backing, N>) {
         if let Some(val) = self {
             senres.append(1u8);
             val.append_to(senres);
@@ -201,9 +253,9 @@ impl<T: SenSer<N>, const N: usize> SenSer<N> for Option<T> {
     }
 }
 
-impl<T: RecDes<N>, const N: usize> RecDes<N> for Option<T> {
-    fn try_get_from(senres: &mut Senres<N>) -> Result<Self, ()> {
-        if senres.offset + 1 > senres.data.len() {
+impl<T: RecDes<Backing, N>, Backing: Senres, const N: usize> RecDes<Backing, N> for Option<T> {
+    fn try_get_from(senres: &SenresReader<Backing, N>) -> Result<Self, ()> {
+        if senres.offset.get() + 1 > senres.backing.as_slice().len() {
             return Err(());
         }
         let check = senres.try_get_from::<u8>()?;
@@ -214,7 +266,7 @@ impl<T: RecDes<N>, const N: usize> RecDes<N> for Option<T> {
             return Err(());
         }
         let my_size = core::mem::size_of::<Self>();
-        if senres.offset + my_size > senres.data.len() {
+        if senres.offset.get() + my_size > senres.backing.as_slice().len() {
             return Err(());
         }
         Ok(Some(T::try_get_from(senres)?))
@@ -230,8 +282,8 @@ primitive_impl! {i32}
 primitive_impl! {u64}
 primitive_impl! {i64}
 
-impl<T: SenSer<N>, const N: usize> SenSer<N> for &[T] {
-    fn append_to(&self, senres: &mut Senres<N>) {
+impl<T: SenSer<Backing, N>, Backing: Senres, const N: usize> SenSer<Backing, N> for &[T] {
+    fn append_to(&self, senres: &mut SenresWriter<Backing, N>) {
         senres.append(self.len() as u32);
         for entry in self.iter() {
             entry.append_to(senres)
@@ -239,13 +291,13 @@ impl<T: SenSer<N>, const N: usize> SenSer<N> for &[T] {
     }
 }
 
-impl<const N: usize> SenSer<N> for str {
-    fn append_to(&self, senres: &mut Senres<N>) {
+impl<Backing: Senres, const N: usize> SenSer<Backing, N> for str {
+    fn append_to(&self, senres: &mut SenresWriter<Backing, N>) {
         senres.append(self.len() as u32);
         for (src, dest) in self
             .as_bytes()
             .iter()
-            .zip(senres.data[senres.offset..].iter_mut())
+            .zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
         {
             *dest = *src;
             senres.offset += 1;
@@ -253,13 +305,13 @@ impl<const N: usize> SenSer<N> for str {
     }
 }
 
-impl<const N: usize> SenSer<N> for &str {
-    fn append_to(&self, senres: &mut Senres<N>) {
+impl<Backing: Senres, const N: usize> SenSer<Backing, N> for &str {
+    fn append_to(&self, senres: &mut SenresWriter<Backing, N>) {
         senres.append(self.len() as u32);
         for (src, dest) in self
             .as_bytes()
             .iter()
-            .zip(senres.data[senres.offset..].iter_mut())
+            .zip(senres.backing.as_mut_slice()[senres.offset..].iter_mut())
         {
             *dest = *src;
             senres.offset += 1;
@@ -267,99 +319,114 @@ impl<const N: usize> SenSer<N> for &str {
     }
 }
 
-impl<const N: usize> RecDes<N> for String {
-    fn try_get_from(senres: &mut Senres<N>) -> Result<Self, ()> {
+impl<Backing: Senres, const N: usize> RecDes<Backing, N> for String {
+    fn try_get_from(senres: &SenresReader<Backing, N>) -> Result<Self, ()> {
         let len = senres.try_get_from::<u32>()? as usize;
-        if senres.offset + len > senres.data.len() {
+        let offset = senres.offset.get();
+        if offset + len > senres.backing.as_slice().len() {
             return Err(());
         }
-        core::str::from_utf8(&senres.data[senres.offset..senres.offset + len])
+        core::str::from_utf8(&senres.backing.as_slice()[offset..offset + len])
             .or(Err(()))
             .map(|e| {
-                senres.offset += len;
+                senres.offset.set(offset + len);
                 e.to_owned()
             })
     }
 }
 
-impl<'a, const N: usize> RecDesRef<'a, N> for str {
-    fn try_get_ref_from(senres: &'a mut Senres<N>) -> Result<&'a Self, ()> {
+impl<'a, Backing: Senres, const N: usize> RecDesRef<'a, Backing, N> for str {
+    fn try_get_ref_from(senres: &'a SenresReader<Backing, N>) -> Result<&'a Self, ()> {
         let len = senres.try_get_from::<u32>()? as usize;
-        if senres.offset + len > senres.data.len() {
+        let offset = senres.offset.get();
+        if offset + len > senres.backing.as_slice().len() {
             return Err(());
         }
-        core::str::from_utf8(&senres.data[senres.offset..senres.offset + len])
+        core::str::from_utf8(&senres.backing.as_slice()[offset..offset + len])
             .or(Err(()))
             .map(|e| {
-                senres.offset += len;
+                senres.offset.set(offset + len);
                 e
             })
     }
 }
 
-impl<'a, T: RecDes<N>, const N: usize> RecDesRef<'a, N> for [T] {
-    fn try_get_ref_from(senres: &'a mut Senres<N>) -> Result<&'a Self, ()> {
+impl<'a, Backing: Senres, T: RecDes<Backing, N>, const N: usize> RecDesRef<'a, Backing, N>
+    for [T]
+{
+    fn try_get_ref_from(senres: &'a SenresReader<Backing, N>) -> Result<&'a Self, ()> {
         let len = senres.try_get_from::<u32>()? as usize;
-        if senres.offset + (len * core::mem::size_of::<T>()) > senres.data.len() {
+        let offset = senres.offset.get();
+        if offset + (len * core::mem::size_of::<T>()) > senres.backing.as_slice().len() {
             return Err(());
         }
         let ret = unsafe {
-            core::slice::from_raw_parts(senres.data.as_ptr().add(senres.offset) as *const T, len)
+            core::slice::from_raw_parts(
+                senres.backing.as_slice().as_ptr().add(offset) as *const T,
+                len,
+            )
         };
-        senres.offset += len * core::mem::size_of::<T>();
+        senres.offset.set(offset + len * core::mem::size_of::<T>());
         Ok(ret)
     }
 }
 
-impl<const N: usize> Default for Senres<N> {
+impl<const N: usize> Default for SenresStack<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn do_stuff(_r: &Senres) {
+fn do_stuff(_r: &SenresStack) {
     println!("Stuff!");
 }
 
 #[test]
 fn main() {
-    let mut sr1 = Senres::<4096>::new();
+    let mut sr1 = SenresStack::<4096>::new();
     // let sr2 = Senres::<4097>::new();
-    let sr3 = Senres::<8192>::new();
+    let sr3 = SenresStack::<8192>::new();
     // let sr4 = Senres::<4098>::new();
-    let sr5 = Senres::new();
+    let sr5 = SenresStack::new();
 
     do_stuff(&sr5);
     println!("Size of sr1: {}", core::mem::size_of_val(&sr1));
     println!("Size of sr3: {}", core::mem::size_of_val(&sr3));
     println!("Size of sr5: {}", core::mem::size_of_val(&sr5));
 
-    sr1.append(16777215u32);
-    sr1.append(u64::MAX);
-    sr1.append("Hello, world!");
-    sr1.append("String2");
-    sr1.append::<Option<u32>>(None);
-    sr1.append::<Option<u32>>(Some(42));
-    sr1.append([1i32, 2, 3, 4, 5].as_slice());
-    sr1.append([5u8, 4, 3, 2].as_slice());
-    sr1.append(["Hello", "There", "World"].as_slice());
+    {
+        let mut writer = sr1.writer();
+        writer.append(16777215u32);
+        writer.append(u64::MAX);
+        writer.append("Hello, world!");
+        writer.append("String2");
+        writer.append::<Option<u32>>(None);
+        writer.append::<Option<u32>>(Some(42));
+        writer.append([1i32, 2, 3, 4, 5].as_slice());
+        writer.append([5u8, 4, 3, 2].as_slice());
+        writer.append(["Hello", "There", "World"].as_slice());
+    }
     println!("sr1: {:?}", sr1);
 
-    sr1.rewind();
-    let val: u32 = sr1.try_get_from().expect("couldn't get the u32 value");
-    println!("u32 val: {}", val);
-    let val: u64 = sr1.try_get_from().expect("couldn't get the u64 value");
-    println!("u64 val: {:x}", val);
-    let val: &str = sr1.try_get_ref_from().expect("couldn't get string value");
-    println!("String val: {}", val);
-    let val: String = sr1.try_get_from().expect("couldn't get string2 value");
-    println!("String2 val: {}", val);
-    let val: Option<u32> = sr1.try_get_from().expect("couldn't get Option<u32>");
-    println!("Option<u32> val: {:?}", val);
-    let val: Option<u32> = sr1.try_get_from().expect("couldn't get Option<u32>");
-    println!("Option<u32> val: {:?}", val);
-    let val: &[i32] = sr1.try_get_ref_from().expect("couldn't get &[i32]");
-    println!("&[i32] val: {:?}", val);
-    let val: &[u8] = sr1.try_get_ref_from().expect("couldn't get &[u8]");
-    println!("&[u8] val: {:?}", val);
+    {
+        let reader = sr1.reader().expect("couldn't get reader");
+        let val: u32 = reader.try_get_from().expect("couldn't get the u32 value");
+        println!("u32 val: {}", val);
+        let val: u64 = reader.try_get_from().expect("couldn't get the u64 value");
+        println!("u64 val: {:x}", val);
+        let val: &str = reader
+            .try_get_ref_from()
+            .expect("couldn't get string value");
+        println!("String val: {}", val);
+        let val: String = reader.try_get_from().expect("couldn't get string2 value");
+        println!("String2 val: {}", val);
+        let val: Option<u32> = reader.try_get_from().expect("couldn't get Option<u32>");
+        println!("Option<u32> val: {:?}", val);
+        let val: Option<u32> = reader.try_get_from().expect("couldn't get Option<u32>");
+        println!("Option<u32> val: {:?}", val);
+        let val: &[i32] = reader.try_get_ref_from().expect("couldn't get &[i32]");
+        println!("&[i32] val: {:?}", val);
+        let val: &[u8] = reader.try_get_ref_from().expect("couldn't get &[u8]");
+        println!("&[u8] val: {:?}", val);
+    }
 }
