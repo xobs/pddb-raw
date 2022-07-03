@@ -149,10 +149,7 @@ pub trait Senres {
             offset: 0,
         };
         writer.append(SENRES_V1_MAGIC);
-        // Workaround until we can write [u8; 4]
-        for b in fourcc {
-            writer.append(b);
-        }
+        writer.append(fourcc);
         Some(writer)
     }
 
@@ -167,12 +164,7 @@ pub trait Senres {
         if SENRES_V1_MAGIC != reader.try_get_from().ok()? {
             return None;
         }
-        let f1 = reader.try_get_from().ok()?;
-        let f2 = reader.try_get_from().ok()?;
-        let f3 = reader.try_get_from().ok()?;
-        let f4 = reader.try_get_from().ok()?;
-        let target_fourcc: [u8; 4] = [f1, f2, f3, f4];
-
+        let target_fourcc: [u8; 4] = reader.try_get_from().ok()?;
         if target_fourcc != fourcc {
             return None;
         }
@@ -483,6 +475,41 @@ impl<T: SenSer<Backing>, Backing: Senres> SenSer<Backing> for &[T] {
     }
 }
 
+impl<T: SenSer<Backing>, Backing: Senres, const N: usize> SenSer<Backing> for [T; N] {
+    fn append_to(&self, senres: &mut Writer<Backing>) {
+        // senres.append(self.len() as u32);
+        senres.align_to(core::mem::align_of::<Self>());
+        for entry in self.iter() {
+            entry.append_to(senres)
+        }
+    }
+}
+
+impl<T: RecDes<Backing>, Backing: Senres, const N: usize> RecDes<Backing> for [T; N] {
+    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
+        let len = core::mem::size_of::<Self>();
+        senres.align_to(core::mem::align_of::<Self>());
+        let offset = senres.offset.get();
+        if offset + len > senres.backing.as_slice().len() {
+            return Err(());
+        }
+
+        // See https://github.com/rust-lang/rust/issues/61956 for why this
+        // is awful
+        let mut output: [core::mem::MaybeUninit<T>; N] =
+            unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+        for elem in &mut output[..] {
+            elem.write(T::try_get_from(senres)?);
+        }
+
+        // Using &mut as an assertion of unique "ownership"
+        let ptr = &mut output as *mut _ as *mut [T; N];
+        let res = unsafe { ptr.read() };
+        core::mem::forget(output);
+        Ok(res)
+    }
+}
+
 impl<Backing: Senres> SenSer<Backing> for str {
     fn append_to(&self, senres: &mut Writer<Backing>) {
         senres.append(self.len() as u32);
@@ -595,7 +622,8 @@ fn main() {
         writer.append(96u8);
         writer.append([1i32, 2, 3, 4, 5].as_slice());
         writer.append([5u8, 4, 3, 2].as_slice());
-        writer.append(["Hello", "There", "World"].as_slice());
+        writer.append([5u16, 4, 2]);
+        writer.append(["Hi", "There", "123456789"]);
         // writer.append(["Hello".to_owned(), "There".to_owned(), "World".to_owned()].as_slice());
     }
     println!("sr1: {:?}", sr1);
@@ -626,5 +654,9 @@ fn main() {
         println!("&[i32] val: {:?}", val);
         let val: &[u8] = reader.try_get_ref_from().expect("couldn't get &[u8]");
         println!("&[u8] val: {:?}", val);
+        let val: [u16; 3] = reader.try_get_from().expect("couldn't get [u16; 3]");
+        println!("[u16; 3] val: {:?}", val);
+        let val: [String; 3] = reader.try_get_from().expect("couldn't get [String; 3]");
+        println!("[String; 3] val: {:?}", val);
     }
 }
