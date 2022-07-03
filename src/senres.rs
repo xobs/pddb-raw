@@ -1,11 +1,30 @@
 // #![allow(unused)]
-use std::convert::TryInto;
+use core::cell::Cell;
+use core::convert::TryInto;
 
 /// Senres V1 always begins with the number 0x344cb6ca to indicate it's valid.
 /// This number will change on subsequent versions.
 const SENRES_V1_MAGIC: u32 = 0x344cb6ca;
 
-use core::cell::Cell;
+#[cfg(target_os = "xous")]
+enum InvokeType {
+    LendMut = 1,
+    Lend = 2,
+    // Move = 3,
+    // Scalar = 4,
+    // BlockingScalar = 5,
+}
+
+#[cfg(target_os = "xous")]
+enum Syscall {
+    SendMessage = 16,
+    ReturnMemory = 20,
+}
+
+#[cfg(target_os = "xous")]
+enum SyscallResult {
+    MemoryReturned = 18,
+}
 
 /// A struct to send and receive data
 #[repr(C, align(4096))]
@@ -17,6 +36,7 @@ pub struct Stack<const N: usize = 4096> {
 pub struct Message<'a> {
     message_id: usize,
     mutable: bool,
+    auto_return: bool,
     data: &'a mut [u8],
 }
 
@@ -28,15 +48,36 @@ impl<'a> Message<'a> {
         Ok(Message {
             message_id,
             mutable,
+            auto_return: true,
             data: unsafe { core::slice::from_raw_parts_mut(data as *mut u8, len) },
         })
+    }
+    // Need to figure out how to make the non-mutable version work
+    // pub fn from_slice(data: &'a [u8]) -> Result<Self, ()> {
+    //     Ok(Message {
+    //         message_id: 0,
+    //         mutable: false,
+    //         auto_return: false,
+    //         data,
+    //     })
+    // }
+    pub fn from_mut_slice(data: &'a mut [u8]) -> Result<Self, ()> {
+        Ok(Message {
+            message_id: 0,
+            mutable: true,
+            auto_return: false,
+            data,
+        })
+    }
+    pub fn auto_return(&mut self, enable: bool) {
+        self.auto_return = enable;
     }
 }
 
 impl<'a> Drop for Message<'a> {
     fn drop(&mut self) {
         #[cfg(target_os = "xous")]
-        {
+        if self.auto_return {
             let mut _a0 = Syscall::ReturnMemory as usize;
             let mut _a1 = self.message_id;
             let mut _a2 = self.data.as_ptr() as usize;
@@ -98,7 +139,7 @@ pub trait Senres {
     }
     fn writer(&mut self, fourcc: [u8; 4]) -> Option<Writer<Self>>
     where
-        Self: std::marker::Sized,
+        Self: core::marker::Sized,
     {
         if !self.can_create_writer() {
             return None;
@@ -117,7 +158,7 @@ pub trait Senres {
 
     fn reader(&self, fourcc: [u8; 4]) -> Option<Reader<Self>>
     where
-        Self: std::marker::Sized,
+        Self: core::marker::Sized,
     {
         let reader = Reader {
             backing: self,
@@ -221,29 +262,15 @@ pub struct Writer<'a, Backing: Senres> {
     offset: usize,
 }
 
+pub struct DelayedWriter<Backing: Senres, T: SenSer<Backing>> {
+    offset: usize,
+    _kind: core::marker::PhantomData<T>,
+    _backing: core::marker::PhantomData<Backing>,
+}
+
 pub struct Reader<'a, Backing: Senres> {
     backing: &'a Backing,
     offset: Cell<usize>,
-}
-
-#[cfg(target_os = "xous")]
-enum InvokeType {
-    LendMut = 1,
-    Lend = 2,
-    // Move = 3,
-    // Scalar = 4,
-    // BlockingScalar = 5,
-}
-
-#[cfg(target_os = "xous")]
-enum Syscall {
-    SendMessage = 16,
-    ReturnMemory = 20,
-}
-
-#[cfg(target_os = "xous")]
-enum SyscallResult {
-    MemoryReturned = 18,
 }
 
 pub trait SenSer<Backing: Senres> {
@@ -253,7 +280,7 @@ pub trait SenSer<Backing: Senres> {
 pub trait RecDes<Backing: Senres> {
     fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()>
     where
-        Self: std::marker::Sized;
+        Self: core::marker::Sized;
 }
 
 pub trait RecDesRef<'a, Backing: Senres> {
@@ -296,6 +323,30 @@ impl<const N: usize> Senres for Stack<N> {
 impl<'a, Backing: Senres> Writer<'a, Backing> {
     pub fn append<T: SenSer<Backing>>(&mut self, other: T) {
         other.append_to(self);
+    }
+
+    pub fn delayed_append<T: SenSer<Backing>>(&mut self) -> DelayedWriter<Backing, T> {
+        let delayed_writer = DelayedWriter {
+            offset: self.offset,
+            _backing: core::marker::PhantomData::<Backing>,
+            _kind: core::marker::PhantomData::<T>,
+        };
+        self.offset += core::mem::size_of::<T>();
+        delayed_writer
+    }
+
+    pub fn do_delayed_append<T: SenSer<Backing>>(
+        &mut self,
+        delayed_writer: DelayedWriter<Backing, T>,
+        other: T,
+    ) {
+        let current_offset = self.offset;
+        self.offset = delayed_writer.offset;
+        other.append_to(self);
+        if self.offset != delayed_writer.offset + core::mem::size_of::<T>() {
+            panic!("writer incorrectly increased offset");
+        }
+        self.offset = current_offset;
     }
 
     pub fn align_to(&mut self, alignment: usize) {
@@ -355,6 +406,32 @@ macro_rules! primitive_impl {
             }
         }
     };
+}
+
+impl<Backing: Senres> SenSer<Backing> for bool {
+    fn append_to(&self, senres: &mut Writer<Backing>) {
+        senres.align_to(core::mem::align_of::<Self>());
+        senres.backing.as_mut_slice()[senres.offset] = if *self { 1 } else { 0 };
+        senres.offset += 1;
+    }
+}
+
+impl<Backing: Senres> RecDes<Backing> for bool {
+    fn try_get_from(senres: &Reader<Backing>) -> Result<Self, ()> {
+        senres.align_to(core::mem::align_of::<Self>());
+        let my_size = core::mem::size_of::<Self>();
+        let offset = senres.offset.get();
+        if offset + my_size > senres.backing.as_slice().len() {
+            return Err(());
+        }
+        let val = match senres.backing.as_slice()[offset] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(()),
+        };
+        senres.offset.set(offset + my_size);
+        val
+    }
 }
 
 impl<T: SenSer<Backing>, Backing: Senres> SenSer<Backing> for Option<T> {
