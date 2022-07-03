@@ -16,13 +16,13 @@ enum InvokeType {
 }
 
 #[cfg(target_os = "xous")]
-enum Syscall {
+pub enum Syscall {
     SendMessage = 16,
     ReturnMemory = 20,
 }
 
 #[cfg(target_os = "xous")]
-enum SyscallResult {
+pub enum SyscallResult {
     MemoryReturned = 18,
 }
 
