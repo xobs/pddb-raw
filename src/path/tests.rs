@@ -1,7 +1,8 @@
-use super::MAIN_SEP;
+// use std::path::MAIN_SEPARATOR;
+pub const MAIN_SEPARATOR: char = ':';
 use std::io;
 
-fn get_path<'a>(s: &'a str, prefix: &'a str) -> Option<&'a str> {
+pub fn get_path<'a>(s: &'a str, prefix: &'a str) -> Option<&'a str> {
     // Empty strings are invalid
     if s.is_empty() {
         return None;
@@ -46,7 +47,7 @@ fn test_split_vectors() {
     for v in vectors.iter().filter(|x| get_path(x, key).is_some()) {
         // print!("Testing \"{}\": ", v);
         // if let Some(v) = get_path(v, key) {
-            println!(">>> {} <<<", v);
+        println!(">>> {} <<<", v);
         // } else {
         //     println!("NOT a path");
         // }
@@ -54,42 +55,54 @@ fn test_split_vectors() {
 }
 
 /// Split a path into its constituant Basis and Dict, if the path is legal.
-fn split_basis_and_dict<F: Fn() -> Option<String>>(src: &str, default: F) -> io::Result<(Option<String>, Option<String>)> {
+pub fn split_basis_and_dict<'a, F: Fn() -> Option<&'a str>>(
+    src: &'a str,
+    default: F,
+) -> io::Result<(Option<&'a str>, Option<&'a str>)> {
     let mut basis = None;
     let dict;
-    if let Some(src) = src.strip_prefix(MAIN_SEP) {
-        if let Some((maybe_basis, maybe_dict)) = src.split_once(MAIN_SEP) {
+    if let Some(src) = src.strip_prefix(MAIN_SEPARATOR) {
+        if let Some((maybe_basis, maybe_dict)) = src.split_once(MAIN_SEPARATOR) {
             if !maybe_basis.is_empty() {
-                basis = Some(maybe_basis.to_owned());
+                println!("basis is empty");
+                basis = Some(maybe_basis);
             } else {
+                println!("default basis");
                 basis = default();
             }
 
             if maybe_dict.is_empty() {
+                println!("dict is empty");
                 dict = None;
             } else {
-                dict = Some(maybe_dict.to_owned());
+                println!("Nope, dict not empty");
+                dict = Some(maybe_dict);
             }
         } else {
             if !src.is_empty() {
-                basis = Some(src.to_owned());
+                println!("Oh, src is not empty?");
+                basis = Some(src);
+            } else {
+                println!("it's empty?")
             }
             dict = None;
         }
     } else {
         if src.is_empty() {
-            return Ok((basis, Some("".to_owned())));
+            println!("Short circuit");
+            return Ok((basis, Some("")));
         }
-        dict = Some(src.to_owned());
+        println!("other thing -- src is {}", src);
+        dict = Some(src);
     }
 
     if let Some(basis) = &basis {
-        if basis.ends_with(MAIN_SEP) {
+        if basis.ends_with(MAIN_SEPARATOR) {
             return Err(io::Error::new(io::ErrorKind::Other, "invalid path"));
         }
     }
     if let Some(dict) = &dict {
-        if dict.ends_with(MAIN_SEP) {
+        if dict.ends_with(MAIN_SEPARATOR) {
             return Err(io::Error::new(io::ErrorKind::Other, "invalid path"));
         }
     }
@@ -97,28 +110,40 @@ fn split_basis_and_dict<F: Fn() -> Option<String>>(src: &str, default: F) -> io:
 }
 
 #[cfg(test)]
-fn default_path() -> Option<String> {
-    Some("{DEFAULT}".to_owned())
+fn default_path<'a>() -> Option<&'a str> {
+    Some("{DEFAULT}")
 }
 
 #[test]
 fn empty_string() {
-    assert_eq!(split_basis_and_dict("", default_path).unwrap(), (None, Some("".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("", default_path).unwrap(),
+        (None, Some(""))
+    );
 }
 
 #[test]
 fn bare_dict() {
-    assert_eq!(split_basis_and_dict("one", default_path).unwrap(), (None, Some("one".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("one", default_path).unwrap(),
+        (None, Some("one"))
+    );
 }
 
 #[test]
 fn dict_with_colon() {
-    assert_eq!(split_basis_and_dict("one:two", default_path).unwrap(), (None, Some("one:two".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("one:two", default_path).unwrap(),
+        (None, Some("one:two"))
+    );
 }
 
 #[test]
 fn dict_with_two_colons() {
-    assert_eq!(split_basis_and_dict("one:two:three", default_path).unwrap(), (None, Some("one:two:three".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("one:two:three", default_path).unwrap(),
+        (None, Some("one:two:three"))
+    );
 }
 
 #[test]
@@ -147,39 +172,78 @@ fn basis_with_two_dicts_with_trailing_colon() {
 
 #[test]
 fn basis_missing_colon() {
-    assert_eq!(split_basis_and_dict(":one", default_path).unwrap(), (Some("one".to_owned()), None));
+    assert_eq!(
+        split_basis_and_dict(":one", default_path).unwrap(),
+        (Some("one"), None)
+    );
 }
 
 #[test]
 fn basis_with_one_dict() {
-    assert_eq!(split_basis_and_dict(":one:two", default_path).unwrap(), (Some("one".to_owned()), Some("two".to_owned())));
+    assert_eq!(
+        split_basis_and_dict(":one:two", default_path).unwrap(),
+        (Some("one"), Some("two"))
+    );
 }
 
 #[test]
 fn basis_with_two_dicts() {
-    assert_eq!(split_basis_and_dict(":one:two:three", default_path).unwrap(), (Some("one".to_owned()), Some("two:three".to_owned())));
+    assert_eq!(
+        split_basis_and_dict(":one:two:three", default_path).unwrap(),
+        (Some("one"), Some("two:three"))
+    );
 }
 #[test]
 fn double_colon() {
     let default = default_path();
-    assert_eq!(split_basis_and_dict("::", default_path).unwrap(), (default, None));
+    assert_eq!(
+        split_basis_and_dict("::", default_path).unwrap(),
+        (default, None)
+    );
 }
 
 #[test]
 fn single_colon() {
-    assert_eq!(split_basis_and_dict(":", default_path).unwrap(), (None, None));
+    assert_eq!(
+        split_basis_and_dict(":", default_path).unwrap(),
+        (None, None)
+    );
+}
+
+#[test]
+fn double_colon_one_key() {
+    let default = default_path();
+    assert_eq!(
+        split_basis_and_dict("::foo", default_path).unwrap(),
+        (default, Some("foo"))
+    );
+}
+
+#[test]
+fn double_colon_one_key_no_default() {
+    let default_path = || None;
+    assert_eq!(
+        split_basis_and_dict("::foo", default_path).unwrap(),
+        (None, Some("foo"))
+    );
 }
 
 #[test]
 fn double_colon_two_keys() {
     let default = default_path();
-    assert_eq!(split_basis_and_dict("::foo:bar", default_path).unwrap(), (default, Some("foo:bar".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("::foo:bar", default_path).unwrap(),
+        (default, Some("foo:bar"))
+    );
 }
 
 #[test]
 fn double_colon_three_keys() {
     let default = default_path();
-    assert_eq!(split_basis_and_dict("::foo:bar:baz", default_path).unwrap(), (default, Some("foo:bar:baz".to_owned())));
+    assert_eq!(
+        split_basis_and_dict("::foo:bar:baz", default_path).unwrap(),
+        (default, Some("foo:bar:baz"))
+    );
 }
 
 #[test]

@@ -7,12 +7,12 @@ use core::convert::TryInto;
 const SENRES_V1_MAGIC: u32 = 0x344cb6ca;
 
 #[cfg(target_os = "xous")]
-enum InvokeType {
+pub enum InvokeType {
     LendMut = 1,
     Lend = 2,
     // Move = 3,
     // Scalar = 4,
-    // BlockingScalar = 5,
+    BlockingScalar = 5,
 }
 
 #[cfg(target_os = "xous")]
@@ -23,6 +23,8 @@ pub enum Syscall {
 
 #[cfg(target_os = "xous")]
 pub enum SyscallResult {
+    Scalar1 = 14,
+    Scalar2 = 15,
     MemoryReturned = 18,
 }
 
@@ -78,26 +80,26 @@ impl<'a> Drop for Message<'a> {
     fn drop(&mut self) {
         #[cfg(target_os = "xous")]
         if self.auto_return {
-            let mut _a0 = Syscall::ReturnMemory as usize;
-            let mut _a1 = self.message_id;
-            let mut _a2 = self.data.as_ptr() as usize;
-            let mut _a3 = self.data.len();
+            let a0 = Syscall::ReturnMemory as usize;
+            let a1 = self.message_id;
+            let a2 = self.data.as_ptr() as usize;
+            let a3 = self.data.len();
 
             // "Offset"
-            let mut _a4 = 0;
+            let a4 = 0;
 
             // "Valid"
-            let mut _a5 = 0;
+            let a5 = 0;
 
             unsafe {
                 core::arch::asm!(
                     "ecall",
-                    inlateout("a0") _a0,
-                    inlateout("a1") _a1,
-                    inlateout("a2") _a2,
-                    inlateout("a3") _a3,
-                    inlateout("a4") _a4,
-                    inlateout("a5") _a5,
+                    inlateout("a0") a0 => _,
+                    inlateout("a1") a1 => _,
+                    inlateout("a2") a2 => _,
+                    inlateout("a3") a3 => _,
+                    inlateout("a4") a4 => _,
+                    inlateout("a5") a5 => _,
                     out("a6") _,
                     out("a7") _,
                 )
@@ -184,21 +186,21 @@ pub trait Senres {
     #[cfg(target_os = "xous")]
     fn lend(&self, connection: u32, opcode: usize) -> Result<(), ()> {
         let mut a0 = Syscall::SendMessage as usize;
-        let mut _a1: usize = connection.try_into().unwrap();
-        let mut _a2 = InvokeType::Lend as usize;
-        let mut _a3 = opcode;
-        let mut _a4 = self.as_ptr() as usize;
-        let mut _a5 = self.len();
+        let a1: usize = connection.try_into().unwrap();
+        let a2 = InvokeType::Lend as usize;
+        let a3 = opcode;
+        let a4 = self.as_ptr() as usize;
+        let a5 = self.len();
 
         unsafe {
             core::arch::asm!(
                 "ecall",
                 inlateout("a0") a0,
-                inlateout("a1") _a1,
-                inlateout("a2") _a2,
-                inlateout("a3") _a3,
-                inlateout("a4") _a4,
-                inlateout("a5") _a5,
+                inlateout("a1") a1 => _,
+                inlateout("a2") a2 => _,
+                inlateout("a3") a3 => _,
+                inlateout("a4") a4 => _,
+                inlateout("a5") a5 => _,
                 out("a6") _,
                 out("a7") _,
             )
@@ -216,21 +218,21 @@ pub trait Senres {
     #[cfg(target_os = "xous")]
     fn lend_mut(&mut self, connection: u32, opcode: usize) -> Result<(), ()> {
         let mut a0 = Syscall::SendMessage as usize;
-        let mut _a1: usize = connection.try_into().unwrap();
-        let mut _a2 = InvokeType::LendMut as usize;
-        let mut _a3 = opcode;
-        let mut _a4 = self.as_mut_ptr() as usize;
-        let mut _a5 = self.len();
+        let mut a1: usize = connection.try_into().unwrap();
+        let a2 = InvokeType::LendMut as usize;
+        let a3 = opcode;
+        let a4 = self.as_mut_ptr() as usize;
+        let a5 = self.len();
 
         unsafe {
             core::arch::asm!(
                 "ecall",
                 inlateout("a0") a0,
-                inlateout("a1") _a1,
-                inlateout("a2") _a2,
-                inlateout("a3") _a3,
-                inlateout("a4") _a4,
-                inlateout("a5") _a5,
+                inlateout("a1") a1,
+                inlateout("a2") a2 => _,
+                inlateout("a3") a3 => _,
+                inlateout("a4") a4 => _,
+                inlateout("a5") a5 => _,
                 out("a6") _,
                 out("a7") _,
             )
@@ -243,7 +245,7 @@ pub trait Senres {
         if result == SyscallResult::MemoryReturned as usize {
             Ok(())
         } else {
-            println!("Unexpected memory return value: {} ({})", result, _a1);
+            println!("Unexpected memory return value: {} ({})", result, a1);
             Err(())
         }
     }

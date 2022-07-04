@@ -2,8 +2,12 @@ const SERVER_NAME_KEYS: &str = "_Root key server and update manager_";
 const SERVER_NAME_PDDB: &str = "_Plausibly Deniable Database_";
 
 use std::fmt::Write as _;
+use std::fs::File;
 use std::path::Path;
 use std::{io::Read, io::Seek, io::Write};
+
+#[cfg(target_os = "xous")]
+use std::os::xous::path::PathExt;
 
 mod services;
 
@@ -114,29 +118,78 @@ impl Pddb {
     // }
 }
 
-fn recursively_list_dirs(root: &Path) {
+fn recursively_list_dirs<P: AsRef<Path>>(root: P) {
     use std::fs;
-    println!("Recursively listing {} ({:?})", root.display(), root);
+    let root = root.as_ref();
+    println!("Recursively listing \"{}\"", root.display());
 
-    // one possible implementation of walking a directory only visiting files
-    fn visit_dirs(dir: &Path) -> std::io::Result<()> {
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    println!(">>> Entering directory {}", path.display());
-                    visit_dirs(&path)?;
-                    println!("<<< left directory {}", path.display());
-                } else {
-                    println!("File: {}", path.display());
-                }
+    fn visit_dirs(dir: &Path, depth: usize) -> std::io::Result<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(o) => o,
+
+            Err(e) => {
+                println!("error reading {}: {}", dir.display(), e);
+                return Ok(());
             }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(o) => o,
+                Err(e) => {
+                    println!("error: {}", e);
+                    continue;
+                }
+            };
+            // let mut path = dir.to_owned();
+            // path.push(entry.path());
+            let path = entry.path();
+            print!("|");
+            let kind;
+            let mut should_recurse = false;
+
+            let is_dir = path.is_dir();
+            let is_file = path.is_file();
+            #[cfg(target_os = "xous")]
+            let is_basis = path.is_basis();
+            #[cfg(not(target_os = "xous"))]
+            let is_basis = false;
+
+            if is_basis {
+                should_recurse = true;
+                kind = "[BASIS]";
+            } else if is_dir && is_file {
+                kind = "[DIR/FILE]";
+                should_recurse = true;
+            } else if is_dir {
+                kind = "[DIR]";
+                should_recurse = true;
+            } else if is_file {
+                kind = "[KEY]";
+            } else {
+                kind = "[UNKNOWN]";
+            }
+
+            for _ in 0..depth * 4 {
+                print!(" ");
+            }
+            print!("{:50}", path.display());
+            for _ in 0..(24usize.saturating_sub(depth * 4)) {
+                print!(" ");
+            }
+            println!("{}", kind);
+            if should_recurse {
+                // let mut path_down = dir.to_owned();
+                // path_down.push(&path);
+                visit_dirs(&path, depth + 1)?;
+            }
+            continue;
         }
+
         Ok(())
     }
 
-    visit_dirs(root).unwrap();
+    visit_dirs(root, 1).unwrap();
+    println!();
 }
 
 fn main() {
@@ -176,19 +229,36 @@ fn main() {
     }
 
     {
-        // let dicts = pddb.list_dictionaries(None);
-        // println!("There are {} dicts in the union basis", dicts.len());
-        // for dict in dicts.iter() {
-        //     println!("Dict: {}", dict);
+        println!("Opening file sys.rtc:tz_offset");
+        let mut f = File::open("sys.rtc:tz_offset").expect("couldn't open tz_offset file!");
+        let mut buf = vec![];
+        let bytes_read = f
+            .read_to_end(&mut buf)
+            .expect("couldn't read contents of file");
+        println!("Read {} bytes of data: {:?}", bytes_read, buf);
+    }
 
-        //     let keys = pddb.list_keys(None, dict);
-        //     println!("There are {} keys in the {} dict", keys.len(), dict);
-        //     for key in keys.iter() {
-        //         println!("    key: {}", key);
-        //     }
-        // }
+    println!("Opening file wlan.networks:Renode");
+    if let Ok(mut f) = File::open("wlan.networks:Renode") {
+        let mut buf = vec![];
+        let bytes_read = f
+            .read_to_end(&mut buf)
+            .expect("couldn't read contents of file");
+        println!("Read {} bytes of data: {:?}", bytes_read, buf);
+        if let Ok(val) = core::str::from_utf8(&buf) {
+            println!("Data as string: [{}]", val);
+        }
+    }
 
-        for path in ["", ":", "wlan.networks", "sys.rtc", "fido.cfg", "vault.passwords"] {
+    {
+        for path in [
+            "",
+            ":",
+            "wlan.networks",
+            "sys.rtc",
+            "fido.cfg",
+            "vault.passwords",
+        ] {
             println!("Listing path {}", path);
             let entries = pddb.list_path(path);
             for entry in entries.iter() {
@@ -198,25 +268,27 @@ fn main() {
         }
     }
 
-    // println!("Going to recursively list directories...");
-    // recursively_list_dirs(Path::new(""));
-    // recursively_list_dirs(Path::new("::"));
-    // recursively_list_dirs(Path::new(":"));
+    println!("Going to recursively list directories...");
+    recursively_list_dirs(Path::new(""));
+    recursively_list_dirs(Path::new("::"));
+    recursively_list_dirs(Path::new(":"));
+    recursively_list_dirs(Path::new(":.System"));
+    recursively_list_dirs(Path::new("sys.rtc"));
 
-    println!("Opening a file...");
-    let mut file = key::Key::open(pddb.cid, None, "wlan.networks", "Renode").unwrap();
-    println!("Reading password...");
-    let mut password = String::new();
-    let len = file
-        .read_to_string(&mut password)
-        .expect("Unable to read password");
-    println!("Password is {} bytes long: {}", len, password);
-    println!("Appending {} to the password", password.len());
-    write!(password, "{}", password.len() + 1).unwrap();
-    println!("Writing {} to password field", password);
-    file.rewind().expect("couldn't rewind password file");
-    file.write_all(password.as_bytes())
-        .expect("unable to update password");
+    // println!("Opening a file...");
+    // let mut file = key::Key::open(pddb.cid, None, "wlan.networks", "Renode").unwrap();
+    // println!("Reading password...");
+    // let mut password = String::new();
+    // let len = file
+    //     .read_to_string(&mut password)
+    //     .expect("Unable to read password");
+    // println!("Password is {} bytes long: {}", len, password);
+    // println!("Appending {} to the password", password.len());
+    // write!(password, "{}", password.len() + 1).unwrap();
+    // println!("Writing {} to password field", password);
+    // file.rewind().expect("couldn't rewind password file");
+    // file.write_all(password.as_bytes())
+    //     .expect("unable to update password");
 
     println!("Done with operations");
 }

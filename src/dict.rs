@@ -34,7 +34,6 @@ impl PathList {
         let reader = request.reader(*b"PthR").expect("unable to get reader");
         if let Ok(1u32) = reader.try_get_from() {
         } else {
-            panic!("Unexpected value");
             return None;
         }
 
@@ -51,10 +50,6 @@ impl PathList {
             entries.push(Entry { name, kind });
         }
         Some(PathList { entries })
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Entry> {
