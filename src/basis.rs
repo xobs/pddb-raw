@@ -1,4 +1,4 @@
-use crate::senres::Senres;
+use crate::senres::{Senres, SenresMut};
 
 pub struct BasisList {
     data: crate::senres::Stack<4096>,
@@ -9,22 +9,12 @@ impl BasisList {
     pub fn new(connection: u32) -> Option<Self> {
         let mut request = crate::senres::Stack::<4096>::new();
 
-        // Request version 1 of the buffer
-        {
-            let mut writer = request.writer(*b"basQ")?;
-            writer.append(1u32);
-        }
-
+        request.writer(*b"basQ")?;
         request
             .lend_mut(connection, crate::Opcodes::ListBasisStd as usize)
             .unwrap();
 
         let reader = request.reader(*b"basR").expect("unable to get reader");
-        let version: u32 = reader.try_get_from().unwrap();
-        if version != 1 {
-            return None;
-        }
-
         let count = reader.try_get_from::<u32>().unwrap() as usize;
         Some(BasisList {
             data: request,

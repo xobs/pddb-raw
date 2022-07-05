@@ -40,14 +40,18 @@ fn test_split_vectors() {
         "one:🥸",
         "one:🥸:⛪",
         "one:four:five",
+        "one:four:two",
+        "one:four:three",
         "onery",
         "oneful",
     ];
-    let key = "";
+    let key = "one:four";
     for v in vectors.iter().filter(|x| get_path(x, key).is_some()) {
         // print!("Testing \"{}\": ", v);
         // if let Some(v) = get_path(v, key) {
-        println!(">>> {} <<<", v);
+        if let Some((root, end)) = v.rsplit_once(':') {
+            println!(">>> {} <<<", end);
+        }
         // } else {
         //     println!("NOT a path");
         // }

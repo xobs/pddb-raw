@@ -1,4 +1,4 @@
-use crate::senres::Senres;
+use crate::senres::{Senres, SenresMut};
 
 #[derive(Debug)]
 pub enum EntryKind {
@@ -22,8 +22,6 @@ impl PathList {
 
         {
             let mut writer = request.writer(*b"PthQ")?;
-            // Request version 1 of the buffer
-            writer.append(1u32);
             writer.append(path);
         }
 
@@ -32,11 +30,6 @@ impl PathList {
             .unwrap();
 
         let reader = request.reader(*b"PthR").expect("unable to get reader");
-        if let Ok(1u32) = reader.try_get_from() {
-        } else {
-            return None;
-        }
-
         let mut entries = vec![];
         let count = reader.try_get_from::<u32>().unwrap() as usize;
         for _ in 0..count {
@@ -45,7 +38,7 @@ impl PathList {
                 Ok(0) => EntryKind::Basis,
                 Ok(1) => EntryKind::Dict,
                 Ok(2) => EntryKind::Key,
-                v => panic!("unexpected entrykind {:?}", v),//return None,
+                v => panic!("unexpected entrykind {:?}", v), //return None,
             };
             entries.push(Entry { name, kind });
         }
