@@ -42,7 +42,8 @@ fn unlock_db(key: &str) {
         key: [u8; 4096],
     }
 
-    const BOOT_PASSWORD_OPCODE: usize = 34;
+    #[allow(non_upper_case_globals)]
+    const InitBootPassword: usize = 340;
     let root_keys = services::connect(SERVER_NAME_KEYS).unwrap();
     let mut unlock_request = UnlockPasswordRequest { key: [0u8; 4096] };
 
@@ -61,7 +62,7 @@ fn unlock_db(key: &str) {
     xous::send_message(
         root_keys,
         xous::Message::new_lend(
-            BOOT_PASSWORD_OPCODE,
+            InitBootPassword,
             memory_range,
             None,
             core::num::NonZeroUsize::new(key.len()),
@@ -86,7 +87,7 @@ impl Pddb {
             self.cid,
             xous::Message::new_blocking_scalar(crate::Opcodes::IsMounted as usize, 0, 0, 0, 0),
         )
-        .map(|v| xous::Result::Scalar1(1) == v)
+        .map(|v| xous::Result::Scalar2(0, 0) == v)
         .unwrap_or(false)
     }
 
@@ -95,7 +96,10 @@ impl Pddb {
             self.cid,
             xous::Message::new_blocking_scalar(crate::Opcodes::TryMount as usize, 0, 0, 0, 0),
         )
-        .map(|v| xous::Result::Scalar1(1) == v)
+        .map(|v| {
+            // println!("try_mount result: {:?}", v);
+            xous::Result::Scalar2(0, 0) == v
+        })
         .unwrap_or(false)
     }
 
@@ -172,7 +176,10 @@ fn recursively_list_dirs<P: AsRef<Path>>(root: P) {
             for _ in 0..depth * 4 {
                 print!(" ");
             }
-            print!("{:50}", entry.file_name().to_str().unwrap_or("{invalid filename}"));
+            print!(
+                "{:50}",
+                entry.file_name().to_str().unwrap_or("{invalid filename}")
+            );
             for _ in 0..(24usize.saturating_sub(depth * 4)) {
                 print!(" ");
             }
@@ -192,10 +199,47 @@ fn recursively_list_dirs<P: AsRef<Path>>(root: P) {
     println!();
 }
 
+fn test_recursive_mkdir() {
+    println!("Creating path mtxcli...");
+    std::fs::create_dir_all("mtxcli").expect("unable to create dir mtxcli");
+    // println!("Created the path, trying again...");
+    // std::fs::create_dir_all("mtxcli").expect("unable to create it again");
+    // println!("Created the path again");
+}
+
+fn test_metadata_not_exist() {
+    let mut keypath = std::path::PathBuf::new();
+    let test_dict = "nonexistent-dict-name";
+    let test_key_name = "nonexistent-key";
+    keypath.push(test_dict);
+    println!("Testing that {} exists", keypath.display());
+    if std::fs::metadata(&keypath).is_ok() {
+        // keypath exists
+        println!("dict '{}' exists", keypath.display());
+    } else {
+        println!("dict '{}' does NOT exist.. creating it", keypath.display());
+        std::fs::create_dir_all(&keypath).expect("unable to create directory");
+    }
+    keypath.push(test_key_name);
+    if std::fs::metadata(&keypath).is_ok() {
+        // keypath exists
+        println!(
+            "dict:key = '{}:{}' exists.. deleting it",
+            test_dict, test_key_name
+        );
+
+        std::fs::remove_file(keypath).expect("unable to remove file");
+    }
+
+    if std::fs::metadata(test_dict).is_ok() {
+        std::fs::remove_dir(test_dict).expect("unable to remove dict");
+    }
+}
+
 fn main() {
     println!("PDDB Raw Operations");
-    println!("Unlocking DB...");
-    unlock_db("a");
+    // println!("Unlocking DB...");
+    // unlock_db("a");
 
     // The PDDB seems to take a long time to start up
     let start_time = std::time::Instant::now();
@@ -228,27 +272,27 @@ fn main() {
         }
     }
 
-    {
-        println!("Opening file sys.rtc:tz_offset");
-        let mut f = File::open("sys.rtc:tz_offset").expect("couldn't open tz_offset file!");
-        let mut buf = vec![];
-        let bytes_read = f
-            .read_to_end(&mut buf)
-            .expect("couldn't read contents of file");
-        println!("Read {} bytes of data: {:?}", bytes_read, buf);
-    }
+    // {
+    //     println!("Opening file sys.rtc:tz_offset");
+    //     let mut f = File::open("sys.rtc:tz_offset").expect("couldn't open tz_offset file!");
+    //     let mut buf = vec![];
+    //     let bytes_read = f
+    //         .read_to_end(&mut buf)
+    //         .expect("couldn't read contents of file");
+    //     println!("Read {} bytes of data: {:?}", bytes_read, buf);
+    // }
 
-    println!("Opening file wlan.networks:Renode");
-    if let Ok(mut f) = File::open("wlan.networks:Renode") {
-        let mut buf = vec![];
-        let bytes_read = f
-            .read_to_end(&mut buf)
-            .expect("couldn't read contents of file");
-        println!("Read {} bytes of data: {:?}", bytes_read, buf);
-        if let Ok(val) = core::str::from_utf8(&buf) {
-            println!("Data as string: [{}]", val);
-        }
-    }
+    // println!("Opening file wlan.networks:Renode");
+    // if let Ok(mut f) = File::open("wlan.networks:Renode") {
+    //     let mut buf = vec![];
+    //     let bytes_read = f
+    //         .read_to_end(&mut buf)
+    //         .expect("couldn't read contents of file");
+    //     println!("Read {} bytes of data: {:?}", bytes_read, buf);
+    //     if let Ok(val) = core::str::from_utf8(&buf) {
+    //         println!("Data as string: [{}]", val);
+    //     }
+    // }
 
     {
         for path in [
@@ -268,121 +312,124 @@ fn main() {
         }
     }
 
-    println!("Listing sys.rtc");
-    recursively_list_dirs(Path::new("sys.rtc"));
+    test_recursive_mkdir();
+    // test_metadata_not_exist();
 
-    println!("Deleting file just to be sure");
-    std::fs::remove_file("sys.rtc:foobar").ok();
+    // println!("Listing sys.rtc");
+    // recursively_list_dirs(Path::new("sys.rtc"));
 
-    std::fs::File::open("sys.rtc:foobar").expect_err("foobar existed when it shouldn't");
+    // println!("Deleting file just to be sure");
+    // std::fs::remove_file("sys.rtc:foobar").ok();
 
-    println!("Creating sys.rtc:foobar");
-    let mut file = std::fs::File::create("sys.rtc:foobar").expect("couldn't create foobar");
-    file.write_all(&[1, 2, 3, 4]).expect("couldn't write file");
-    core::mem::drop(file);
+    // std::fs::File::open("sys.rtc:foobar").expect_err("foobar existed when it shouldn't");
 
-    println!("Listing sys.rtc again");
-    recursively_list_dirs(Path::new("sys.rtc"));
+    // println!("Creating sys.rtc:foobar");
+    // let mut file = std::fs::File::create("sys.rtc:foobar").expect("couldn't create foobar");
+    // file.write_all(&[1, 2, 3, 4]).expect("couldn't write file");
+    // core::mem::drop(file);
 
-    let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
-    let mut v = vec![];
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    println!("Contents of file: {:?}", v);
-    assert_eq!(&v, &[1, 2, 3, 4]);
-    file.rewind().expect("couldn't rewind file");
-    v.push(42);
-    println!("Writing {:?} to file", v);
-    file.write_all(&v).expect("couldn't append data to foobar");
-    println!("closing file again");
-    core::mem::drop(file);
+    // println!("Listing sys.rtc again");
+    // recursively_list_dirs(Path::new("sys.rtc"));
 
-    let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
-    let mut v = vec![];
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    println!("Contents of file: {:?}", v);
-    assert_eq!(&v, &[1, 2, 3, 4, 42]);
-    println!("closing file again");
-    core::mem::drop(file);
+    // let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
+    // let mut v = vec![];
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // println!("Contents of file: {:?}", v);
+    // assert_eq!(&v, &[1, 2, 3, 4]);
+    // file.rewind().expect("couldn't rewind file");
+    // v.push(42);
+    // println!("Writing {:?} to file", v);
+    // file.write_all(&v).expect("couldn't append data to foobar");
+    // println!("closing file again");
+    // core::mem::drop(file);
 
-    // Test that "create_new" works
-    println!("Trying to create a file that exists. This should fail.");
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .open("sys.rtc:foobar")
-        .expect_err("opened a file twice");
+    // let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
+    // let mut v = vec![];
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // println!("Contents of file: {:?}", v);
+    // assert_eq!(&v, &[1, 2, 3, 4, 42]);
+    // println!("closing file again");
+    // core::mem::drop(file);
 
-    // Test that "truncate" works
-    let mut file = std::fs::OpenOptions::new()
-        .truncate(true)
-        .open("sys.rtc:foobar")
-        .expect("couldn't open foobar for truncating");
-    let mut v = vec![];
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    println!("Contents of file: {:?}", v);
-    assert_eq!(&v, &[]);
-    v.push(42);
-    file.write_all(&v).expect("couldn't append data to foobar");
-    println!("closing file again");
-    core::mem::drop(file);
+    // // Test that "create_new" works
+    // println!("Trying to create a file that exists. This should fail.");
+    // std::fs::OpenOptions::new()
+    //     .create_new(true)
+    //     .open("sys.rtc:foobar")
+    //     .expect_err("opened a file twice");
 
-    println!("Testing that the truncate append worked");
-    let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
-    let mut v = vec![];
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    println!("Contents of file: {:?}", v);
-    assert_eq!(&v, &[42]);
-    core::mem::drop(file);
+    // // Test that "truncate" works
+    // let mut file = std::fs::OpenOptions::new()
+    //     .truncate(true)
+    //     .open("sys.rtc:foobar")
+    //     .expect("couldn't open foobar for truncating");
+    // let mut v = vec![];
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // println!("Contents of file: {:?}", v);
+    // assert_eq!(&v, &[]);
+    // v.push(42);
+    // file.write_all(&v).expect("couldn't append data to foobar");
+    // println!("closing file again");
+    // core::mem::drop(file);
 
-    // Test that "append" works
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open("sys.rtc:foobar")
-        .expect("couldn't open foobar for truncating");
-    let mut v = vec![];
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    println!("Contents of file: {:?}", v);
-    assert_eq!(&v, &[]);
-    file.rewind().expect("couldn't rewind");
-    file.read_to_end(&mut v)
-        .expect("couldn't snarf data from foobar");
-    assert_eq!(&v, &[42]);
-    core::mem::drop(file);
+    // println!("Testing that the truncate append worked");
+    // let mut file = std::fs::File::open("sys.rtc:foobar").expect("couldn't open foobar");
+    // let mut v = vec![];
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // println!("Contents of file: {:?}", v);
+    // assert_eq!(&v, &[42]);
+    // core::mem::drop(file);
 
-    // Test deleting
-    std::fs::remove_file("sys.rtc:foobar").expect("couldn't delete sys.rtc:foobar");
-    std::fs::remove_file("sys.rtc:foobar").expect_err("delete sys.rtc:foobar twice");
+    // // Test that "append" works
+    // let mut file = std::fs::OpenOptions::new()
+    //     .append(true)
+    //     .open("sys.rtc:foobar")
+    //     .expect("couldn't open foobar for truncating");
+    // let mut v = vec![];
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // println!("Contents of file: {:?}", v);
+    // assert_eq!(&v, &[]);
+    // file.rewind().expect("couldn't rewind");
+    // file.read_to_end(&mut v)
+    //     .expect("couldn't snarf data from foobar");
+    // assert_eq!(&v, &[42]);
+    // core::mem::drop(file);
 
-    println!("Trying file creation. First, removing possible files");
-    std::fs::remove_file("sys.rtc:baz:quux").ok();
-    std::fs::remove_dir("sys.rtc:baz").ok();
+    // // Test deleting
+    // std::fs::remove_file("sys.rtc:foobar").expect("couldn't delete sys.rtc:foobar");
+    // std::fs::remove_file("sys.rtc:foobar").expect_err("delete sys.rtc:foobar twice");
 
-    println!("Testing path creation");
-    std::fs::create_dir("sys.rtc:baz").expect("unable to create sys.rtc:baz");
-    recursively_list_dirs(Path::new("sys.rtc"));
+    // println!("Trying file creation. First, removing possible files");
+    // std::fs::remove_file("sys.rtc:baz:quux").ok();
+    // std::fs::remove_dir("sys.rtc:baz").ok();
 
-    println!("Testing file creation");
-    let mut file = std::fs::File::create("sys.rtc:baz:quux").expect("couldn't create file");
-    file.write_all(&[5, 4, 3, 2])
-        .expect("couldn't write test data");
-    core::mem::drop(file);
+    // println!("Testing path creation");
+    // std::fs::create_dir("sys.rtc:baz").expect("unable to create sys.rtc:baz");
+    // recursively_list_dirs(Path::new("sys.rtc"));
 
-    println!("Listing new directory");
-    recursively_list_dirs(Path::new("sys.rtc"));
+    // println!("Testing file creation");
+    // let mut file = std::fs::File::create("sys.rtc:baz:quux").expect("couldn't create file");
+    // file.write_all(&[5, 4, 3, 2])
+    //     .expect("couldn't write test data");
+    // core::mem::drop(file);
 
-    println!("Removing the directory. This should fail.");
-    std::fs::remove_dir("sys.rtc:baz")
-        .expect_err("directory was deleted even though it's got stuff");
+    // println!("Listing new directory");
+    // recursively_list_dirs(Path::new("sys.rtc"));
 
-    println!("Removing files for real");
-    std::fs::remove_file("sys.rtc:baz:quux").expect("unable to remove file");
-    println!("Current directory listing:");
-    recursively_list_dirs(Path::new("sys.rtc"));
-    std::fs::remove_dir("sys.rtc:baz").expect("directory was deleted even though it's empty");
+    // println!("Removing the directory. This should fail.");
+    // std::fs::remove_dir("sys.rtc:baz")
+    //     .expect_err("directory was deleted even though it's got stuff");
+
+    // println!("Removing files for real");
+    // std::fs::remove_file("sys.rtc:baz:quux").expect("unable to remove file");
+    // println!("Current directory listing:");
+    // recursively_list_dirs(Path::new("sys.rtc"));
+    // std::fs::remove_dir("sys.rtc:baz").expect("directory was deleted even though it's empty");
 
     // println!("Going to recursively list directories...");
     // recursively_list_dirs(Path::new(""));
