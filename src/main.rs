@@ -19,10 +19,11 @@ mod senres;
 
 #[repr(usize)]
 pub(crate) enum Opcodes {
-    IsMounted = 0,
+    // IsMounted = 0,
     TryMount = 1,
 
     WriteKeyFlush = 18,
+    PeriodicScrub = 19,
     KeyDrop = 20,
 
     ListBasisStd = 26,
@@ -82,13 +83,25 @@ impl Pddb {
         }
     }
 
-    pub fn is_mounted(&self) -> bool {
+    // pub fn is_mounted(&self) -> bool {
+    //     xous::send_message(
+    //         self.cid,
+    //         xous::Message::new_blocking_scalar(crate::Opcodes::IsMounted as usize, 0, 0, 0, 0),
+    //     )
+    //     .map(|v| {
+    //         // println!("is_mounted result: {:?}", v);
+    //         matches!(v, xous::Result::Scalar2(0, _))
+    //     })
+    //     .expect("unexpected return value")
+    // }
+
+    pub fn scrub(&self) {
+        // this is what actually runs every interval, to a first order
         xous::send_message(
             self.cid,
-            xous::Message::new_blocking_scalar(crate::Opcodes::IsMounted as usize, 0, 0, 0, 0),
+            xous::Message::new_scalar(crate::Opcodes::PeriodicScrub as usize, 0, 0, 0, 0),
         )
-        .map(|v| xous::Result::Scalar2(0, 0) == v)
-        .unwrap_or(false)
+        .expect("couldn't send scrub request");
     }
 
     pub fn try_mount(&self) -> bool {
@@ -98,9 +111,9 @@ impl Pddb {
         )
         .map(|v| {
             // println!("try_mount result: {:?}", v);
-            xous::Result::Scalar2(0, 0) == v
+            matches!(v, xous::Result::Scalar2(0, _))
         })
-        .unwrap_or(false)
+        .expect("unexpected return value")
     }
 
     pub fn list_bases(&self) -> basis::BasisList {
@@ -200,10 +213,10 @@ fn recursively_list_dirs<P: AsRef<Path>>(root: P) {
 }
 
 fn test_recursive_mkdir() {
-    println!("Creating path mtxcli...");
-    std::fs::create_dir_all("mtxcli").expect("unable to create dir mtxcli");
+    println!("Creating path test-create...");
+    std::fs::create_dir_all("test-create").expect("unable to create dir test-create");
     // println!("Created the path, trying again...");
-    // std::fs::create_dir_all("mtxcli").expect("unable to create it again");
+    // std::fs::create_dir_all("test-create").expect("unable to create it again");
     // println!("Created the path again");
 }
 
@@ -250,12 +263,12 @@ fn main() {
         "Starting mount (elapsed: {} ms)",
         start_time.elapsed().as_millis()
     );
-    loop {
-        pddb.try_mount();
+    while !pddb.try_mount() {
+        // pddb.try_mount();
         try_mount_calls += 1;
-        if pddb.is_mounted() {
-            break;
-        }
+        // if pddb.is_mounted() {
+        //     break;
+        // }
     }
     println!(
         "PDDB mounted with {} try_mount calls after {} ms",
@@ -263,14 +276,14 @@ fn main() {
         start_time.elapsed().as_millis()
     );
 
-    println!("Doing other operations...");
-    {
-        let list = pddb.list_bases();
-        println!("There are {} bases", list.len());
-        for entry in &list.iter() {
-            println!("Basis: {}", entry);
-        }
-    }
+   println!("Doing other operations...");
+    // {
+    //     let list = pddb.list_bases();
+    //     println!("There are {} bases", list.len());
+    //     for entry in &list.iter() {
+    //         println!("Basis: {}", entry);
+    //     }
+    // }
 
     // {
     //     println!("Opening file sys.rtc:tz_offset");
@@ -294,23 +307,25 @@ fn main() {
     //     }
     // }
 
-    {
-        for path in [
-            "",
-            ":",
-            "wlan.networks",
-            "sys.rtc",
-            "fido.cfg",
-            "vault.passwords",
-        ] {
-            println!("Listing path {}", path);
-            let entries = pddb.list_path(path);
-            for entry in entries.iter() {
-                println!("{:?}", entry);
-            }
-            println!();
-        }
-    }
+    // {
+    //     for path in [
+    //         "",
+    //         ":",
+    //         "wlan.networks",
+    //         "sys.rtc",
+    //         "fido.cfg",
+    //         "vault.passwords",
+    //     ] {
+    //         println!("Listing path {}", path);
+    //         let entries = pddb.list_path(path);
+    //         for entry in entries.iter() {
+    //             println!("{:?}", entry);
+    //         }
+    //         println!();
+    //     }
+    // }
+
+    // std::fs::File::open("nonexistent-file").ok();
 
     test_recursive_mkdir();
     // test_metadata_not_exist();
